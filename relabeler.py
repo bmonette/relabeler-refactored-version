@@ -1,16 +1,15 @@
-import os
-import datetime
 import tkinter
 from tkinter import filedialog
 from tkinter import messagebox
 from tkinter import ttk
+import os
+
 from tkinterdnd2 import TkinterDnD, DND_FILES
 
 from engine import build_rename_plan, RenameOptions
 from filesystem import apply_rename_plan, undo_rename_mappings
 from validation import validate_inputs
 from log_utils import build_timestamped_log_path
-
 
 # Global variables and settings
 file_mappings = []  # Stores (new_path, old_path) for undo functionality.
@@ -45,6 +44,11 @@ def _build_options_from_ui() -> RenameOptions:
     )
 
 
+def _set_status(text: str) -> None:
+    status_label.config(text=text)
+    mainwindow.update_idletasks()
+
+
 def rename_files():
     """
     Renames all files in the selected folder according to the pattern and options
@@ -53,12 +57,12 @@ def rename_files():
     folder_path = entry_folder_path.get()
     options = _build_options_from_ui()
 
-    # Validation moved out of UI logic
     errors = validate_inputs(folder_path, options)
     if errors:
         messagebox.showerror("Error", "\n".join(errors))
         return
 
+    # Create a log file path (logic moved out to log_utils)
     log_file_path = build_timestamped_log_path()
 
     # Build operations via engine (tested)
@@ -68,23 +72,28 @@ def rename_files():
         messagebox.showerror("Error", f"Error building rename plan: {e}")
         return
 
-    # Configure progress bar
-    progress_bar["maximum"] = len(operations)
+    total = len(operations)
+    progress_bar["maximum"] = total
     progress_bar["value"] = 0
-    mainwindow.update_idletasks()
+    _set_status("Starting rename...")
 
-    # Apply plan via filesystem layer (tested)
-    result = apply_rename_plan(folder_path, operations, log_file_path=log_file_path)
+    def on_progress(current: int, total: int, op):
+        progress_bar["value"] = current
+        _set_status(f"Renaming file {current} of {total}: {op.old_name}")
 
-    # Update progress bar to full (simple + safe)
-    progress_bar["value"] = len(operations)
-    mainwindow.update_idletasks()
+    # Apply plan via filesystem (tested)
+    result = apply_rename_plan(
+        folder_path,
+        operations,
+        log_file_path=log_file_path,
+        on_progress=on_progress,
+    )
 
-    # Save mappings for undo (new_path, old_path)
+    # Save mappings for undo
     file_mappings.clear()
     file_mappings.extend(result.mappings)
 
-    # UI feedback
+    # Final UI state
     if result.errors:
         messagebox.showerror("Error", "Some files failed to rename:\n\n" + "\n".join(result.errors))
 
@@ -94,10 +103,9 @@ def rename_files():
             "The following files were skipped because they already exist:\n\n" + "\n".join(result.skipped)
         )
 
-    status_label.config(text="Renaming complete!")
+    _set_status("Renaming complete!")
     messagebox.showinfo("Success", "Rename operation finished!")
 
-    # Enable undo only if we actually renamed something
     button_undo.config(state="normal" if file_mappings else "disabled")
 
 
@@ -111,7 +119,6 @@ def preview_files():
 
     preview_listbox.delete(0, tkinter.END)
 
-    # Validation moved out of UI logic
     errors = validate_inputs(folder_path, options)
     if errors:
         messagebox.showerror("Error", "\n".join(errors))
@@ -126,22 +133,37 @@ def preview_files():
     for op in operations:
         preview_listbox.insert(tkinter.END, f'{op.old_name} "->" {op.new_name}')
 
+    _set_status(f"Preview ready: {len(operations)} file(s).")
+
 
 def undo_rename():
     """
     Reverts the last rename operation by renaming files back to their original names.
     Uses the filesystem undo function (tested).
     """
-    if file_mappings:
-        errors = undo_rename_mappings(file_mappings)
+    if not file_mappings:
+        return
 
-        if errors:
-            messagebox.showerror("Error", "Undo had issues:\n\n" + "\n".join(errors))
-        else:
-            messagebox.showinfo("Success", "Undo successful!")
+    total = len(file_mappings)
+    progress_bar["maximum"] = total
+    progress_bar["value"] = 0
+    _set_status("Starting undo...")
 
-        file_mappings.clear()
-        button_undo.config(state="disabled")
+    def on_undo_progress(current: int, total: int, filename: str):
+        progress_bar["value"] = current
+        _set_status(f"Undoing {current} of {total}: {filename}")
+
+    errors = undo_rename_mappings(file_mappings, on_progress=on_undo_progress)
+
+    if errors:
+        messagebox.showerror("Error", "Undo had issues:\n\n" + "\n".join(errors))
+        _set_status("Undo completed with errors.")
+    else:
+        messagebox.showinfo("Success", "Undo successful!")
+        _set_status("Undo complete.")
+
+    file_mappings.clear()
+    button_undo.config(state="disabled")
 
 
 def handle_drag_and_drop(event):
@@ -156,6 +178,7 @@ def handle_drag_and_drop(event):
     if os.path.isdir(dropped_path):
         entry_folder_path.delete(0, tkinter.END)
         entry_folder_path.insert(0, dropped_path)
+        _set_status("Folder selected via drag-and-drop.")
     else:
         messagebox.showerror("Error", "Please drop a valid folder.")
 

@@ -1,7 +1,9 @@
 venv/
 __pycache__/
+logs/
 *.pyc
 dist/
 build/
 *.spec
 *.old
+*.json

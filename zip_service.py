@@ -12,7 +12,7 @@ from engine import build_rename_plan, RenameOptions
 from filesystem import apply_rename_plan
 from validation import validate_inputs
 from log_utils import maybe_create_log_path
-from relabeler_cli import _save_mappings  # reuse your JSON writer
+from relabeler_cli import _save_mappings as save_mappings
 
 
 def extract_zip(zip_path: Path, dest: Path) -> None:
@@ -87,7 +87,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         # Save mappings (useful if you want to undo locally later)
         if args.mappings_out and not args.dry_run:
-            _save_mappings(args.mappings_out, result.mappings)
+            save_mappings(args.mappings_out, result.mappings)
 
         # Summary
         print(f"Planned: {len(ops)}")

@@ -6,157 +6,116 @@ from tkinter import messagebox
 from tkinter import ttk
 from tkinterdnd2 import TkinterDnD, DND_FILES
 
-# Step 2: Import the extracted engine (engine.py must be beside this file)
 from engine import build_rename_plan, RenameOptions
+from filesystem import apply_rename_plan, undo_rename_mappings
+from validation import validate_inputs
+from log_utils import build_timestamped_log_path
+
 
 # Global variables and settings
-file_mappings = []  # Stores the mapping between old and new file names for undo functionality.
+file_mappings = []  # Stores (new_path, old_path) for undo functionality.
 
-# Function definitions
+
 def browse_folder():
     """
     Opens a folder selection dialog and inserts the selected path
     into the entry_folder_path entry field.
     """
-    folder_path = filedialog.askdirectory()  # Open dialog to choose folder.
-    entry_folder_path.delete(0, tkinter.END)  # Clear any existing text in the folder path entry.
-    entry_folder_path.insert(0, folder_path)  # Insert the selected folder path.
+    folder_path = filedialog.askdirectory()
+    entry_folder_path.delete(0, tkinter.END)
+    entry_folder_path.insert(0, folder_path)
 
-def rename_files():
+
+def _build_options_from_ui() -> RenameOptions:
     """
-    Renames all files in the selected folder according to the pattern and options
-    provided by the user (e.g., adding date, time, and/or changing the extension).
+    Build RenameOptions from the UI state (single source of truth).
     """
-    skipped_files = []  # Stores files that couldn't be renamed (e.g., if filename already exists).
-
-    folder_path = entry_folder_path.get()  # Get the selected folder path from entry.
-    pattern = entry_pattern.get()  # Get the rename pattern from entry.
-
-    # Check if the folder path and pattern are provided.
-    if folder_path == "":
-        messagebox.showerror("Error", "Please select a folder")
-        return
-
-    if pattern == "":
-        messagebox.showerror("Error", "Please enter a rename pattern")
-        return
-
-    log_dir = "logs"  # Directory to store rename operation logs.
-    os.makedirs(log_dir, exist_ok=True)  # Create logs directory if it doesn't exist.
-
-    # Create a timestamped log file to store operation logs.
-    log_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file_path = os.path.join(log_dir, f"log_file_{log_timestamp}.log")
-
-    file_mappings.clear()  # Clear previous mappings to avoid conflicts.
-
-    # Get and filter the files (exclude directories).
-    files = os.listdir(folder_path)
-    files = [f for f in files if os.path.isfile(os.path.join(folder_path, f))]
-
-    # Sort files alphabetically in a case-insensitive manner.
-    files.sort(key=lambda s: s.lower())
-
-    # Configure progress bar.
-    progress_bar["maximum"] = len(files)
-    progress_bar["value"] = 0
-
-    # Start renaming files one by one.
-    for index, file_name in enumerate(files):
-        number = str(index + 1).zfill(5)  # Create a padded 5-digit number for sequencing.
-        new_name = pattern.replace("##", number)  # Replace placeholder with the generated number.
-        base, ext = os.path.splitext(file_name)  # Split filename and extension.
-
-        # If "Change Extension" is enabled, use the provided extension.
-        if change_extension_var.get():
-            new_ext = entry_extension.get().strip()
-            if not new_ext.startswith("."):
-                new_ext = "." + new_ext
-            ext = new_ext
-
-        new_name_with_ext = new_name + ext  # Combine new name with extension.
-
-        # Add date/time to filename if selected by the user.
-        if date_var.get():
-            file_path = os.path.join(folder_path, file_name)
-            stats = os.stat(file_path)
-            created_time = datetime.datetime.fromtimestamp(stats.st_ctime)
-            date_str = created_time.strftime("%Y%m%d")  # Format as YYYYMMDD
-            time_str = created_time.strftime("%H%M%S")  # Format as HHMMSS
-
-            # Append date and optionally time.
-            if time_var.get():
-                final_name = f"{new_name}_{date_str}_{time_str}{ext}"
-            else:
-                final_name = f"{new_name}_{date_str}{ext}"
-        else:
-            final_name = new_name_with_ext
-
-        # Full paths for renaming.
-        new_path = os.path.join(folder_path, final_name)
-        old_path = os.path.join(folder_path, file_name)
-
-        try:
-            # Skip if file with the new name already exists.
-            if os.path.exists(new_path):
-                skipped_files.append(final_name)
-                current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                with open(log_file_path, "a") as log_file:
-                    log_file.write(f"[{current_time}] Skipped (already exists): {final_name}\n")
-                continue
-
-            # Rename file and save mapping for undo.
-            os.rename(old_path, new_path)
-            file_mappings.append((new_path, old_path))
-
-            # Log the renaming action.
-            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(log_file_path, "a") as log_file:
-                log_file.write(f"[{current_time}] Renamed: {file_name} -> {final_name}\n")
-
-        except Exception as e:
-            messagebox.showerror("Error", f"Error renaming {file_name}: {e}")
-
-        # Update progress bar and status label.
-        progress_bar["value"] += 1
-        mainwindow.update_idletasks()
-        status_label.config(text=f"Renaming file {index + 1} of {len(files)}: {file_name}")
-
-    # Notify user about skipped files, if any.
-    if skipped_files:
-        messagebox.showwarning(
-            "Warning",
-            "The following files were skipped because they already exist:\n\n" + "\n".join(skipped_files)
-        )
-
-    status_label.config(text="Renaming complete!")
-    messagebox.showinfo("Success", "All files renamed successfully!")
-    button_undo.config(state="normal")  # Enable undo button after renaming.
-
-def preview_files():
-    """
-    Displays a preview of the renamed files in the listbox, based on the user-specified pattern.
-    Step 2 change: preview uses the extracted engine (build_rename_plan).
-    """
-    folder_path = entry_folder_path.get()
     pattern = entry_pattern.get()
-    preview_listbox.delete(0, tkinter.END)  # Clear previous preview entries.
 
-    if folder_path == "":
-        messagebox.showerror("Error", "Please select a folder")
-        return
+    new_ext = None
+    if change_extension_var.get():
+        new_ext = entry_extension.get().strip()
 
-    if pattern == "":
-        messagebox.showerror("Error", "Please enter a rename pattern")
-        return
-
-    options = RenameOptions(
+    return RenameOptions(
         pattern=pattern,
         include_date=date_var.get(),
         include_time=time_var.get(),
         change_extension=change_extension_var.get(),
-        new_extension=entry_extension.get().strip() if change_extension_var.get() else None,
+        new_extension=new_ext,
     )
+
+
+def rename_files():
+    """
+    Renames all files in the selected folder according to the pattern and options
+    provided by the user.
+    """
+    folder_path = entry_folder_path.get()
+    options = _build_options_from_ui()
+
+    # Validation moved out of UI logic
+    errors = validate_inputs(folder_path, options)
+    if errors:
+        messagebox.showerror("Error", "\n".join(errors))
+        return
+
+    log_file_path = build_timestamped_log_path()
+
+    # Build operations via engine (tested)
+    try:
+        operations = build_rename_plan(folder_path, options)
+    except Exception as e:
+        messagebox.showerror("Error", f"Error building rename plan: {e}")
+        return
+
+    # Configure progress bar
+    progress_bar["maximum"] = len(operations)
+    progress_bar["value"] = 0
+    mainwindow.update_idletasks()
+
+    # Apply plan via filesystem layer (tested)
+    result = apply_rename_plan(folder_path, operations, log_file_path=log_file_path)
+
+    # Update progress bar to full (simple + safe)
+    progress_bar["value"] = len(operations)
+    mainwindow.update_idletasks()
+
+    # Save mappings for undo (new_path, old_path)
+    file_mappings.clear()
+    file_mappings.extend(result.mappings)
+
+    # UI feedback
+    if result.errors:
+        messagebox.showerror("Error", "Some files failed to rename:\n\n" + "\n".join(result.errors))
+
+    if result.skipped:
+        messagebox.showwarning(
+            "Warning",
+            "The following files were skipped because they already exist:\n\n" + "\n".join(result.skipped)
+        )
+
+    status_label.config(text="Renaming complete!")
+    messagebox.showinfo("Success", "Rename operation finished!")
+
+    # Enable undo only if we actually renamed something
+    button_undo.config(state="normal" if file_mappings else "disabled")
+
+
+def preview_files():
+    """
+    Displays a preview of the renamed files in the listbox.
+    Uses the engine (tested) and validation (logic).
+    """
+    folder_path = entry_folder_path.get()
+    options = _build_options_from_ui()
+
+    preview_listbox.delete(0, tkinter.END)
+
+    # Validation moved out of UI logic
+    errors = validate_inputs(folder_path, options)
+    if errors:
+        messagebox.showerror("Error", "\n".join(errors))
+        return
 
     try:
         operations = build_rename_plan(folder_path, options)
@@ -167,20 +126,23 @@ def preview_files():
     for op in operations:
         preview_listbox.insert(tkinter.END, f'{op.old_name} "->" {op.new_name}')
 
+
 def undo_rename():
     """
     Reverts the last rename operation by renaming files back to their original names.
+    Uses the filesystem undo function (tested).
     """
     if file_mappings:
-        for new_path, old_path in reversed(file_mappings):
-            try:
-                os.rename(new_path, old_path)
-            except Exception as e:
-                messagebox.showerror("Error", f"Error undoing rename: {os.path.basename(new_path)}: {e}")
+        errors = undo_rename_mappings(file_mappings)
 
-        messagebox.showinfo("Success", "Undo successful!")
-        file_mappings.clear()  # Clear mappings after undo.
-        button_undo.config(state="disabled")  # Disable undo button.
+        if errors:
+            messagebox.showerror("Error", "Undo had issues:\n\n" + "\n".join(errors))
+        else:
+            messagebox.showinfo("Success", "Undo successful!")
+
+        file_mappings.clear()
+        button_undo.config(state="disabled")
+
 
 def handle_drag_and_drop(event):
     """
@@ -188,16 +150,15 @@ def handle_drag_and_drop(event):
     """
     dropped_path = event.data.strip()
 
-    # Handle paths with curly braces (common in some OS drag events).
     if dropped_path.startswith("{") and dropped_path.endswith("}"):
         dropped_path = dropped_path[1:-1]
 
-    # If valid directory, insert it in the entry field.
     if os.path.isdir(dropped_path):
         entry_folder_path.delete(0, tkinter.END)
         entry_folder_path.insert(0, dropped_path)
     else:
         messagebox.showerror("Error", "Please drop a valid folder.")
+
 
 def toggle_extension_entry():
     """
@@ -209,6 +170,7 @@ def toggle_extension_entry():
         entry_extension.delete(0, tkinter.END)
         entry_extension.config(state="disabled")
 
+
 def show_about():
     """
     Displays information about the Relabeler application.
@@ -218,8 +180,9 @@ def show_about():
         "Relabeler Version 1.0\n\nDeveloped by Benoit Monette\n\nA batch file renaming tool with preview, undo, drag-and-drop, and more!"
     )
 
+
 # Main window setup
-mainwindow = TkinterDnD.Tk()  # Create main window with drag-and-drop support.
+mainwindow = TkinterDnD.Tk()
 mainwindow.title("Relabeler Version 1.0")
 mainwindow.resizable(True, True)
 mainwindow.geometry("600x400")
@@ -227,9 +190,9 @@ mainwindow.minsize(780, 400)
 mainwindow.maxsize(800, 600)
 
 # Boolean variables tied to checkboxes.
-date_var = tkinter.BooleanVar()  # Add date option.
-time_var = tkinter.BooleanVar()  # Add time option.
-change_extension_var = tkinter.BooleanVar()  # Change extension option.
+date_var = tkinter.BooleanVar()
+time_var = tkinter.BooleanVar()
+change_extension_var = tkinter.BooleanVar()
 
 # Folder selection widgets
 label_select_folder = tkinter.Label(mainwindow, text="Select a folder:")

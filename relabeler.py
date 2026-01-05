@@ -1,9 +1,9 @@
-import tkinter
-from tkinter import filedialog
-from tkinter import messagebox
-from tkinter import ttk
 import os
+import tkinter
+from dataclasses import dataclass, field
+from typing import List, Tuple
 
+from tkinter import filedialog, messagebox, ttk
 from tkinterdnd2 import TkinterDnD, DND_FILES
 
 from engine import build_rename_plan, RenameOptions
@@ -11,8 +11,31 @@ from filesystem import apply_rename_plan, undo_rename_mappings
 from validation import validate_inputs
 from log_utils import build_timestamped_log_path
 
-# Global variables and settings
-file_mappings = []  # Stores (new_path, old_path) for undo functionality.
+
+# =========================
+# App State (no globals)
+# =========================
+@dataclass
+class AppState:
+    undo_mappings: List[Tuple[str, str]] = field(default_factory=list)  # (new_path, old_path)
+    is_busy: bool = False
+
+    def clear_undo(self) -> None:
+        self.undo_mappings.clear()
+
+    def can_undo(self) -> bool:
+        return bool(self.undo_mappings)
+
+
+app_state = AppState()
+
+
+# =========================
+# UI Helpers / Callbacks
+# =========================
+def _set_status(text: str) -> None:
+    status_label.config(text=text)
+    mainwindow.update_idletasks()
 
 
 def browse_folder():
@@ -44,16 +67,14 @@ def _build_options_from_ui() -> RenameOptions:
     )
 
 
-def _set_status(text: str) -> None:
-    status_label.config(text=text)
-    mainwindow.update_idletasks()
-
-
 def rename_files():
     """
     Renames all files in the selected folder according to the pattern and options
     provided by the user.
     """
+    if app_state.is_busy:
+        return
+
     folder_path = entry_folder_path.get()
     options = _build_options_from_ui()
 
@@ -62,57 +83,61 @@ def rename_files():
         messagebox.showerror("Error", "\n".join(errors))
         return
 
-    # Create a log file path (logic moved out to log_utils)
-    log_file_path = build_timestamped_log_path()
-
-    # Build operations via engine (tested)
+    app_state.is_busy = True
     try:
-        operations = build_rename_plan(folder_path, options)
-    except Exception as e:
-        messagebox.showerror("Error", f"Error building rename plan: {e}")
-        return
+        # Create a log file path
+        log_file_path = build_timestamped_log_path()
 
-    total = len(operations)
-    progress_bar["maximum"] = total
-    progress_bar["value"] = 0
-    _set_status("Starting rename...")
+        # Build operations via engine (tested)
+        try:
+            operations = build_rename_plan(folder_path, options)
+        except Exception as e:
+            messagebox.showerror("Error", f"Error building rename plan: {e}")
+            return
 
-    def on_progress(current: int, total: int, op):
-        progress_bar["value"] = current
-        _set_status(f"Renaming file {current} of {total}: {op.old_name}")
+        total = len(operations)
+        progress_bar["maximum"] = total
+        progress_bar["value"] = 0
+        _set_status("Starting rename...")
 
-    # Apply plan via filesystem (tested)
-    result = apply_rename_plan(
-        folder_path,
-        operations,
-        log_file_path=log_file_path,
-        on_progress=on_progress,
-    )
+        def on_progress(current: int, total: int, op):
+            progress_bar["value"] = current
+            _set_status(f"Renaming file {current} of {total}: {op.old_name}")
 
-    # Save mappings for undo
-    file_mappings.clear()
-    file_mappings.extend(result.mappings)
-
-    # Final UI state
-    if result.errors:
-        messagebox.showerror("Error", "Some files failed to rename:\n\n" + "\n".join(result.errors))
-
-    if result.skipped:
-        messagebox.showwarning(
-            "Warning",
-            "The following files were skipped because they already exist:\n\n" + "\n".join(result.skipped)
+        # Apply plan via filesystem (tested)
+        result = apply_rename_plan(
+            folder_path,
+            operations,
+            log_file_path=log_file_path,
+            on_progress=on_progress,
         )
 
-    _set_status("Renaming complete!")
-    messagebox.showinfo("Success", "Rename operation finished!")
+        # Save mappings for undo (owned by AppState)
+        app_state.undo_mappings = result.mappings.copy()
 
-    button_undo.config(state="normal" if file_mappings else "disabled")
+        # UI feedback
+        if result.errors:
+            messagebox.showerror("Error", "Some files failed to rename:\n\n" + "\n".join(result.errors))
+
+        if result.skipped:
+            messagebox.showwarning(
+                "Warning",
+                "The following files were skipped because they already exist:\n\n" + "\n".join(result.skipped)
+            )
+
+        _set_status("Renaming complete!")
+        messagebox.showinfo("Success", "Rename operation finished!")
+
+        button_undo.config(state="normal" if app_state.can_undo() else "disabled")
+
+    finally:
+        app_state.is_busy = False
 
 
 def preview_files():
     """
     Displays a preview of the renamed files in the listbox.
-    Uses the engine (tested) and validation (logic).
+    Uses engine + validation (logic separated from UI).
     """
     folder_path = entry_folder_path.get()
     options = _build_options_from_ui()
@@ -139,31 +164,39 @@ def preview_files():
 def undo_rename():
     """
     Reverts the last rename operation by renaming files back to their original names.
-    Uses the filesystem undo function (tested).
+    Uses filesystem undo (tested).
     """
-    if not file_mappings:
+    if app_state.is_busy:
         return
 
-    total = len(file_mappings)
-    progress_bar["maximum"] = total
-    progress_bar["value"] = 0
-    _set_status("Starting undo...")
+    if not app_state.can_undo():
+        return
 
-    def on_undo_progress(current: int, total: int, filename: str):
-        progress_bar["value"] = current
-        _set_status(f"Undoing {current} of {total}: {filename}")
+    app_state.is_busy = True
+    try:
+        total = len(app_state.undo_mappings)
+        progress_bar["maximum"] = total
+        progress_bar["value"] = 0
+        _set_status("Starting undo...")
 
-    errors = undo_rename_mappings(file_mappings, on_progress=on_undo_progress)
+        def on_undo_progress(current: int, total: int, filename: str):
+            progress_bar["value"] = current
+            _set_status(f"Undoing {current} of {total}: {filename}")
 
-    if errors:
-        messagebox.showerror("Error", "Undo had issues:\n\n" + "\n".join(errors))
-        _set_status("Undo completed with errors.")
-    else:
-        messagebox.showinfo("Success", "Undo successful!")
-        _set_status("Undo complete.")
+        errors = undo_rename_mappings(app_state.undo_mappings, on_progress=on_undo_progress)
 
-    file_mappings.clear()
-    button_undo.config(state="disabled")
+        if errors:
+            messagebox.showerror("Error", "Undo had issues:\n\n" + "\n".join(errors))
+            _set_status("Undo completed with errors.")
+        else:
+            messagebox.showinfo("Success", "Undo successful!")
+            _set_status("Undo complete.")
+
+        app_state.clear_undo()
+        button_undo.config(state="disabled")
+
+    finally:
+        app_state.is_busy = False
 
 
 def handle_drag_and_drop(event):
@@ -204,7 +237,9 @@ def show_about():
     )
 
 
+# =========================
 # Main window setup
+# =========================
 mainwindow = TkinterDnD.Tk()
 mainwindow.title("Relabeler Version 1.0")
 mainwindow.resizable(True, True)

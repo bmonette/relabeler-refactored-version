@@ -1,9 +1,7 @@
-import os
 import datetime
 from types import SimpleNamespace
 
-import pytest
-
+import engine
 from engine import build_rename_plan, RenameOptions
 
 
@@ -15,8 +13,9 @@ def _create_files(folder, names):
 def test_numbering_and_pattern_replacement(tmp_path):
     _create_files(tmp_path, ["a.txt", "b.txt", "c.txt"])
 
+    # Want 5 digits -> use #####
     options = RenameOptions(
-        pattern="File_##",
+        pattern="File_#####",
         include_date=False,
         include_time=False,
         change_extension=False,
@@ -38,7 +37,7 @@ def test_case_insensitive_sort(tmp_path):
     _create_files(tmp_path, ["b.txt", "A.txt", "c.txt"])
 
     options = RenameOptions(
-        pattern="X_##",
+        pattern="X_#####",  # 5 digits
         include_date=False,
         include_time=False,
         change_extension=False,
@@ -60,7 +59,7 @@ def test_change_extension_adds_dot_when_missing(tmp_path):
     _create_files(tmp_path, ["one.JPG", "two.png"])
 
     options = RenameOptions(
-        pattern="Img_##",
+        pattern="Img_#####",  # 5 digits
         include_date=False,
         include_time=False,
         change_extension=True,
@@ -79,7 +78,7 @@ def test_change_extension_keeps_dot_when_present(tmp_path):
     _create_files(tmp_path, ["one.txt"])
 
     options = RenameOptions(
-        pattern="Doc_##",
+        pattern="Doc_#####",  # 5 digits
         include_date=False,
         include_time=False,
         change_extension=True,
@@ -98,24 +97,14 @@ def test_include_date_appends_yyyymmdd(monkeypatch, tmp_path):
     fixed_dt = datetime.datetime(2026, 1, 5, 9, 8, 7)
     fixed_ts = fixed_dt.timestamp()
 
-    real_stat = os.stat
-
-    def fake_stat(path):
-        st = real_stat(path)
-        # return an object with everything real + forced st_ctime
-        return SimpleNamespace(**{**st.__dict__, "st_ctime": fixed_ts})
-
-    # os.stat returns an os.stat_result, which doesn't have __dict__ on all platforms,
-    # so safer approach: just wrap the attribute we use with a simple object.
-    # We'll instead monkeypatch os.stat to return a SimpleNamespace with st_ctime only,
-    # and let engine ignore other fields.
-    def fake_stat_minimal(path):
+    # Patch ONLY engine.os.stat (never patch global os.stat in tests on Py3.13)
+    def fake_stat(path, *args, **kwargs):
         return SimpleNamespace(st_ctime=fixed_ts)
 
-    monkeypatch.setattr(os, "stat", fake_stat_minimal)
+    monkeypatch.setattr(engine.os, "stat", fake_stat)
 
     options = RenameOptions(
-        pattern="File_##",
+        pattern="File_#####",  # 5 digits
         include_date=True,
         include_time=False,
         change_extension=False,
@@ -133,10 +122,14 @@ def test_include_date_and_time_appends_yyyymmdd_hhmmss(monkeypatch, tmp_path):
     fixed_dt = datetime.datetime(2026, 1, 5, 9, 8, 7)
     fixed_ts = fixed_dt.timestamp()
 
-    monkeypatch.setattr(os, "stat", lambda path: SimpleNamespace(st_ctime=fixed_ts))
+    def fake_stat(path, *args, **kwargs):
+        return SimpleNamespace(st_ctime=fixed_ts)
+
+    # Patch ONLY engine.os.stat
+    monkeypatch.setattr(engine.os, "stat", fake_stat)
 
     options = RenameOptions(
-        pattern="File_##",
+        pattern="File_#####",  # 5 digits
         include_date=True,
         include_time=True,
         change_extension=False,
@@ -154,7 +147,7 @@ def test_ignores_directories(tmp_path):
     (tmp_path / "subfolder" / "inside.txt").write_text("x", encoding="utf-8")
 
     options = RenameOptions(
-        pattern="X_##",
+        pattern="X_#####",  # 5 digits
         include_date=False,
         include_time=False,
         change_extension=False,

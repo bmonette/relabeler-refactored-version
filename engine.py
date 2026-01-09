@@ -1,7 +1,11 @@
 import os
 import datetime
+import re
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List
+
+
+_HASH_RUN_RE = re.compile(r"(#+)")
 
 
 @dataclass
@@ -19,6 +23,26 @@ class RenameOperation:
     new_name: str
 
 
+def _apply_counter_pattern(pattern: str, counter: int) -> str:
+    """
+    Replace the first run of # with a zero-padded counter.
+    Example:
+      "Vacation_##"    + 1 -> "Vacation_01"
+      "Vacation_###"   + 1 -> "Vacation_001"
+      "Vacation_####"  + 1 -> "Vacation_0001"
+    """
+    match = _HASH_RUN_RE.search(pattern)
+    if not match:
+        raise ValueError("Pattern must contain at least one '#' group (e.g., Vacation_###).")
+
+    run = match.group(1)
+    width = len(run)
+    number = f"{counter:0{width}d}"
+
+    start, end = match.span(1)
+    return pattern[:start] + number + pattern[end:]
+
+
 def build_rename_plan(
     folder_path: str,
     options: RenameOptions,
@@ -33,10 +57,10 @@ def build_rename_plan(
     operations: List[RenameOperation] = []
 
     for index, file_name in enumerate(files):
-        number = str(index + 1).zfill(5)
         base, ext = os.path.splitext(file_name)
 
-        new_name = options.pattern.replace("##", number)
+        # Counter is 1-based
+        new_base = _apply_counter_pattern(options.pattern, index + 1)
 
         if options.change_extension and options.new_extension:
             ext = options.new_extension
@@ -50,11 +74,11 @@ def build_rename_plan(
             time_str = created.strftime("%H%M%S")
 
             if options.include_time:
-                final_name = f"{new_name}_{date_str}_{time_str}{ext}"
+                final_name = f"{new_base}_{date_str}_{time_str}{ext}"
             else:
-                final_name = f"{new_name}_{date_str}{ext}"
+                final_name = f"{new_base}_{date_str}{ext}"
         else:
-            final_name = new_name + ext
+            final_name = new_base + ext
 
         operations.append(
             RenameOperation(

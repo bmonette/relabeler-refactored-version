@@ -16,7 +16,7 @@ def _create_files(folder: Path, names: list[str]) -> None:
 def test_cli_preview_prints_plan(tmp_path, capsys):
     _create_files(tmp_path, ["b.txt", "A.txt"])
 
-    code = main(["preview", str(tmp_path), "--pattern", "File_##"])
+    code = main(["preview", str(tmp_path), "--pattern", "File_#####"])
     assert code == 0
 
     out = capsys.readouterr().out.strip().splitlines()
@@ -52,7 +52,7 @@ def test_cli_rename_writes_mappings_and_undo_restores(tmp_path, capsys):
         "rename",
         str(tmp_path),
         "--pattern",
-        "R_##",
+        "R_#####",
         "--mappings-out",
         str(mappings_path),
     ])

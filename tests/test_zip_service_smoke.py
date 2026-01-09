@@ -25,7 +25,7 @@ def test_zip_service_renames_and_outputs_zip(tmp_path):
 
     _make_zip(zip_in, {"b.txt": "b", "A.txt": "a"})
 
-    code = zip_main([str(zip_in), str(zip_out), "--pattern", "File_##"])
+    code = zip_main([str(zip_in), str(zip_out), "--pattern", "File_#####"])
     assert code == 0
     assert zip_out.exists()
 

@@ -1,10 +1,13 @@
-# validation.py
 from __future__ import annotations
 
 import os
+import re
 from typing import List
 
 from engine import RenameOptions
+
+
+_HASH_RUNS_RE = re.compile(r"(#+)")
 
 
 def validate_inputs(folder_path: str, options: RenameOptions) -> List[str]:
@@ -23,12 +26,21 @@ def validate_inputs(folder_path: str, options: RenameOptions) -> List[str]:
 
     if not options.pattern or not options.pattern.strip():
         errors.append("Please enter a rename pattern.")
+    else:
+        runs = _HASH_RUNS_RE.findall(options.pattern)
+        if not runs:
+            errors.append("Pattern must include a counter placeholder using # (e.g., Vacation_##).")
+        elif len(runs) > 1:
+            errors.append("Pattern must contain only one group of # (e.g., Vacation_###).")
+        else:
+            width = len(runs[0])
+            if width < 2 or width > 6:
+                errors.append("Counter padding must be between 2 and 6 # characters (## to ######).")
 
     if options.change_extension:
         if options.new_extension is None or not options.new_extension.strip():
             errors.append("Please enter a new extension (e.g., jpg or .jpg).")
 
-    # Your engine uses time only when date is enabled, so make it explicit.
     if options.include_time and not options.include_date:
         errors.append("Include Time requires Include Date (time is based on file timestamp).")
 
